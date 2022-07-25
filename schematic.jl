@@ -138,7 +138,7 @@ function iterator(model::MCTmodel, ϕ::T, B::T, C::T, i::Int)::Tuple{T,T} where 
     for _ in 1:maxIter
         ϕtmp = copy(ϕ)
         m = kernel(model, ϕtmp, i)
-        ϕ = m*B - C
+        ϕ = m .* B - C
         if isapprox(ϕ, ϕtmp, rtol=accuracy, atol=accuracy)
             break
         end
@@ -149,15 +149,15 @@ end
 function solve_block_body(sol::MomentSolutions, i::Int, h::Float64)::cortype(sol)
     @inbounds begin
     ibar = (i-1)÷2
-    C = -sol.m[i-1]*sol.dΦ[1] - sol.ϕ[i-1]*sol.dM[1]
+    C = -sol.m[i-1] .* sol.dΦ[1] - sol.ϕ[i-1] .* sol.dM[1]
     for k in 2:ibar
-        C += (sol.m[i-k+1] - sol.m[i-k]) * sol.dΦ[k]
-        C += (sol.ϕ[i-k+1] - sol.ϕ[i-k]) * sol.dM[k]
+        C += (sol.m[i-k+1] - sol.m[i-k]) .* sol.dΦ[k]
+        C += (sol.ϕ[i-k+1] - sol.ϕ[i-k]) .* sol.dM[k]
     end
     if i-ibar > ibar+1
-        C += (sol.ϕ[i-ibar] - sol.ϕ[i-ibar-1]) * sol.dM[ibar+1]
+        C += (sol.ϕ[i-ibar] - sol.ϕ[i-ibar-1]) .* sol.dM[ibar+1]
     end
-    C += sol.m[i-ibar] * sol.ϕ[ibar+1]
+    C += sol.m[i-ibar] .* sol.ϕ[ibar+1]
     end
     return C
 end
@@ -165,11 +165,11 @@ end
 
 function solve_block!(model::MCTmodel, sol::MomentSolutions, h::Float64, istart::Int, iend::Int; lazy_moments::Bool=true)::Nothing
     A = sol.dM[1] + 1.0 + 1.5*model.nu/h
-    B = (1.0 - sol.dΦ[1]) / A
+    B = (1.0 - sol.dΦ[1]) ./ A
     @inbounds begin
         for i in istart:iend
-            C = solve_block_body(sol, i, h) / A
-            C += (-2.0*sol.ϕ[i-1] + 0.5*sol.ϕ[i-2]) * model.nu/h/A
+            C = solve_block_body(sol, i, h) ./ A
+            C += (-2.0*sol.ϕ[i-1] + 0.5*sol.ϕ[i-2]) * model.nu/h ./ A
             sol.ϕ[i],sol.m[i] = iterator(model, sol.ϕ[i-1], B, C, i)
             if !lazy_moments
                 sol.dΦ[i-1] = 0.5 * (sol.ϕ[i-1] + sol.ϕ[i])
