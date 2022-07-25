@@ -4,6 +4,7 @@
 
 using DelimitedFiles
 using LoopVectorization
+using StaticArrays
 
 const maxIter = 1000000
 const accuracy = 1e-9
@@ -26,6 +27,7 @@ function kernel(model::F12Model, ϕ::Real, i::Int)::Real
     return model.v1 * ϕ + model.v2 * ϕ^2
 end
 cortype(model::F12Model)::DataType = Float64
+one_value(::F12Model) = Float64(1.)
 
 mutable struct SjoegrenModel <: MCTmodel
     vs::Float64
@@ -41,11 +43,30 @@ function kernel(model::SjoegrenModel, ϕs::Real, i::Int)::Real
     return model.vs * ϕ * ϕs
 end
 cortype(model::SjoegrenModel)::DataType = Float64
+one_value(::SjoegrenModel) = Float64(1.)
 
 link!(model::SjoegrenModel, dict) = (model.ϕ = dict[model.base])
 
 
-struct MomentSolutions{T<:Vector{Float64}} <: MCTresults
+struct BosseKriegerModel <: MCTmodel
+    v1::Float64
+    v2::Float64
+    v3::Float64
+    nu::SVector{2,Float64}
+    function BosseKriegerModel(v1::Real, v2::Real, v3::Real)
+        new(v1, v2, v3, [1.0, 1.0])
+    end
+end
+function kernel(model::BosseKriegerModel, ϕ::SVector{2,T}, i::Int)::SVector{2,Float64} where T<:Real
+    return SVector{2,Float64}([model.v1 * ϕ[1]^2 + model.v2 * ϕ[2]^2, model.v3 * ϕ[1] * ϕ[2]])
+end
+cortype(model::BosseKriegerModel)::DataType = SVector{2,Float64}
+one_value(::BosseKriegerModel) = SVector{2,Float64}([1,1])
+
+
+
+#struct MomentSolutions{T<:Vector{Float64}} <: MCTresults
+struct MomentSolutions{T} <: MCTresults
     ϕ::T
     m::T
     dΦ::T
@@ -96,12 +117,12 @@ function initial_values!(model::MCTmodel, sol::MomentSolutions, h::Float64, imax
     @inbounds begin
     for i in 1:imax
         t = h*(i-1)
-        sol.ϕ[i] = one(cortype(model)) - t/model.nu
+        sol.ϕ[i] = one_value(model) - one_value(model)*t ./ model.nu
         sol.m[i] = kernel(model, sol.ϕ[i], i)
     end
-    @turbo for i in 1:imax-1
-        sol.dΦ[i] = 0.5 * (sol.ϕ[i] + sol.ϕ[i+1])
-        sol.dM[i] = 0.5 * (sol.m[i] + sol.m[i+1])
+    for i in 1:imax-1
+        sol.dΦ[i] = (sol.ϕ[i] .+ sol.ϕ[i+1]) .* 0.5
+        sol.dM[i] = (sol.m[i] .+ sol.m[i+1]) .* 0.5
     end
     sol.dΦ[imax] = sol.ϕ[imax]
     sol.dM[imax] = sol.m[imax]
@@ -117,7 +138,7 @@ function decimize!(sol::MomentSolutions, h::Float64, halfblocksize::Int)::Float6
         sol.dΦ[i] = 0.5 * (sol.dΦ[di-1] + sol.dΦ[di])
         sol.dM[i] = 0.5 * (sol.dM[di-1] + sol.dM[di])
     end
-    @turbo for i in imid:halfblocksize-1
+    for i in imid:halfblocksize-1
         di = i+i
         sol.dΦ[i] = 0.25 * (sol.ϕ[di-1] + 2*sol.ϕ[di] + sol.ϕ[di+1])
         sol.dM[i] = 0.25 * (sol.m[di-1] + 2*sol.m[di] + sol.m[di+1])
@@ -164,12 +185,12 @@ end
 
 
 function solve_block!(model::MCTmodel, sol::MomentSolutions, h::Float64, istart::Int, iend::Int; lazy_moments::Bool=true)::Nothing
-    A = sol.dM[1] + 1.0 + 1.5*model.nu/h
-    B = (1.0 - sol.dΦ[1]) ./ A
+    A = sol.dM[1] .+ 1.0 .+ 1.5*model.nu/h
+    B = (1.0 .- sol.dΦ[1]) ./ A
     @inbounds begin
         for i in istart:iend
             C = solve_block_body(sol, i, h) ./ A
-            C += (-2.0*sol.ϕ[i-1] + 0.5*sol.ϕ[i-2]) * model.nu/h ./ A
+            C += (-2.0*sol.ϕ[i-1] + 0.5*sol.ϕ[i-2]) .* model.nu/h ./ A
             sol.ϕ[i],sol.m[i] = iterator(model, sol.ϕ[i-1], B, C, i)
             if !lazy_moments
                 sol.dΦ[i-1] = 0.5 * (sol.ϕ[i-1] + sol.ϕ[i])
@@ -249,7 +270,7 @@ open("/tmp/1", "w") do io
 end
 
 f12 = F12Model(0.,3.95)
-models = Vector{MCTmodel}([f12,SjoegrenModel(30.,f12)])
+models = Vector{MCTmodel}([f12,SjoegrenModel(30.,f12),BosseKriegerModel(2.0,0.1645,38.)])
 solutions = SolutionStack{MomentSolutions}(models,512)
 
 open("/tmp/1v", "w") do io
